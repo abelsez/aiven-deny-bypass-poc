@@ -1,0 +1,54 @@
+name: aiven-auth-kafka-deny-bypass-poc
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          java -version
+          echo "-----"
+
+      - name: Clone upstream at the audited commit
+        run: |
+          git clone --quiet https://github.com/Aiven-Open/auth-for-apache-kafka.git upstream
+          cd upstream
+          git checkout --quiet 34cf5fb110fbbc33a21773305b3c6e88868ed994
+          echo "checked out: $(git rev-parse HEAD)"
+
+      - name: Install live PoC test against the real authorizer
+        run: |
+          cp DenyBypassLivePoC.java \
+             upstream/src/test/java/io/aiven/kafka/auth/DenyBypassLivePoC.java
+
+      - name: Run PoC (real AivenAclAuthorizerV2 + AclAivenToNativeConverter)
+        working-directory: upstream
+        run: |
+          ./gradlew --no-daemon --console=plain test \
+            --tests 'io.aiven.kafka.auth.DenyBypassLivePoC' \
+            -i 2>&1 | tee ../poc-gradle.log
+
+      - name: Extract PoC evidence
+        if: always()
+        run: |
+          echo "=================== POC EVIDENCE ==================="
+          grep -E "\[CONTROL\]|\[BUG\]|\[convert\]|expected|but was|BUILD (SUCCESSFUL|FAILED)" \
+               poc-gradle.log | sed 's/^/  /' || true
+
+      - name: Upload raw evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deny-bypass-poc-evidence
+          path: |
+            poc-gradle.log
+            upstream/build/test-results/
